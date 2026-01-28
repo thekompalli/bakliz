@@ -1,0 +1,180 @@
+{
+  "name": "BAKLIZ - Daily Draft Run",
+  "nodes": [
+    {
+      "parameters": {
+        "triggerTimes": {
+          "item": [
+            {
+              "mode": "everyDay",
+              "hour": 7,
+              "minute": 0
+            }
+          ]
+        }
+      },
+      "id": "cron_daily",
+      "name": "Cron",
+      "type": "n8n-nodes-base.cron",
+      "typeVersion": 1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{($env.BAKLIZ_API_BASE_URL || 'http://backend:8000') + '/api/auth/login'}}",
+        "method": "POST",
+        "responseFormat": "json",
+        "jsonParameters": true,
+        "bodyParametersJson": "={\"username\":\"{{$env.BAKLIZ_ADMIN_USERNAME}}\",\"password\":\"{{$env.BAKLIZ_ADMIN_PASSWORD}}\"}"
+      },
+      "id": "http_login",
+      "name": "Login",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{($env.BAKLIZ_API_BASE_URL || 'http://backend:8000') + '/api/config'}}",
+        "method": "GET",
+        "responseFormat": "json",
+        "headerParametersUi": {
+          "parameter": [
+            {
+              "name": "Authorization",
+              "value": "={{'Bearer ' + $node[\"Login\"].json[\"access_token\"]}}"
+            }
+          ]
+        }
+      },
+      "id": "http_get_config",
+      "name": "Get Config",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [700, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{($env.BAKLIZ_API_BASE_URL || 'http://backend:8000') + '/api/run'}}",
+        "method": "POST",
+        "responseFormat": "json",
+        "jsonParameters": true,
+        "bodyParametersJson": "={\"overrides\":{}}",
+        "headerParametersUi": {
+          "parameter": [
+            {
+              "name": "Authorization",
+              "value": "={{'Bearer ' + $node[\"Login\"].json[\"access_token\"]}}"
+            }
+          ]
+        }
+      },
+      "id": "http_run",
+      "name": "Run",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [940, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{$node[\"Run\"].json[\"pool_exhausted\"]}}",
+              "operation": "isTrue"
+            }
+          ],
+          "number": [
+            {
+              "value1": "={{$node[\"Run\"].json[\"created_drafts\"]}}",
+              "operation": "smaller",
+              "value2": "={{$node[\"Run\"].json[\"quota\"]}}"
+            }
+          ]
+        },
+        "combineOperation": "any"
+      },
+      "id": "if_alert",
+      "name": "Needs Alert?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1180, 300]
+    },
+    {
+      "parameters": {
+        "fromEmail": "no-reply@bakliz.local",
+        "toEmail": "={{$node[\"Get Config\"].json[\"alert_email\"]}}",
+        "subject": "={{'BAKLIZ alert: ' + $node[\"Run\"].json[\"created_drafts\"] + '/' + $node[\"Run\"].json[\"quota\"]}}",
+        "text": "={{JSON.stringify($node[\"Run\"].json, null, 2)}}"
+      },
+      "id": "email_alert",
+      "name": "Send Alert Email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [1420, 220]
+    }
+  ],
+  "connections": {
+    "Cron": {
+      "main": [
+        [
+          {
+            "node": "Login",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Login": {
+      "main": [
+        [
+          {
+            "node": "Get Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Config": {
+      "main": [
+        [
+          {
+            "node": "Run",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run": {
+      "main": [
+        [
+          {
+            "node": "Needs Alert?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Needs Alert?": {
+      "main": [
+        [
+          {
+            "node": "Send Alert Email",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
+
