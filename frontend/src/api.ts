@@ -9,6 +9,7 @@ export type Config = {
   location: string
   company_size_min: number
   daily_objective: number
+  linkup_search_depth: 'standard' | 'deep'
   email_subject_template: string
   email_body_template: string
   alert_email: string

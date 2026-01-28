@@ -23,6 +23,7 @@ class Config(Base):
     location: Mapped[str] = mapped_column(Text, default="", nullable=False)
     company_size_min: Mapped[int] = mapped_column(Integer, default=50, nullable=False)
     daily_objective: Mapped[int] = mapped_column(Integer, default=10, nullable=False)
+    linkup_search_depth: Mapped[str] = mapped_column(String(16), default="standard", nullable=False)
     email_subject_template: Mapped[str] = mapped_column(Text, default="Hello {{Company}}", nullable=False)
     email_body_template: Mapped[str] = mapped_column(
         Text,

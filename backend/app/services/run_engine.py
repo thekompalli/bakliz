@@ -123,6 +123,7 @@ def run_daily_iter(
         "location": config.location,
         "company_size_min": config.company_size_min,
         "daily_objective": config.daily_objective,
+        "linkup_search_depth": getattr(config, "linkup_search_depth", "standard"),
         "email_subject_template": config.email_subject_template,
         "email_body_template": config.email_body_template,
         "alert_email": config.alert_email,
@@ -181,7 +182,7 @@ def run_daily_iter(
     history = HistoryIndex.build(history_rows)
 
     settings = Settings()
-    linkup = LinkupService(db=db, run_id=run_id)
+    linkup = LinkupService(db=db, run_id=run_id, search_depth=str(effective.get("linkup_search_depth") or "standard"))
     zeliq = ZeliqService(db=db, run_id=run_id)
     graph = GraphClient()
 
@@ -268,6 +269,59 @@ def run_daily_iter(
         domain_norm = normalize_domain(company_domain)
         name_norm = normalize_company_name(company_name)
         email_norm = (email or "").strip().lower() or None
+
+        # De-duplicate within a run: if we already have a row for the same run+company+email, update it instead
+        # of inserting a second row. This avoids races where Zeliq callbacks arrive before /run logs the outcome.
+        if email_norm and domain_norm:
+            existing = (
+                db.execute(
+                    select(History)
+                    .where(History.run_id == run_id)
+                    .where(History.company_domain_norm == domain_norm)
+                    .where(History.email_norm == email_norm)
+                    .order_by(History.date_time.desc(), History.id.desc())
+                    .limit(1)
+                )
+                .scalars()
+                .first()
+            )
+            if existing is not None and existing.status_code in {"ENRICH_CALLBACK", "ENRICH_FAILED"}:
+                existing.date_time = _now()
+                existing.company_name = company_name or existing.company_name
+                existing.company_domain = company_domain or existing.company_domain
+                existing.employee_count = employee_count if employee_count is not None else existing.employee_count
+                existing.first_name = first_name or existing.first_name
+                existing.last_name = last_name or existing.last_name
+                existing.email = email or existing.email
+                existing.job_title = job_title or existing.job_title
+                existing.status_code = status_code
+                existing.status_detail = status_detail
+                existing.company_domain_norm = domain_norm or existing.company_domain_norm
+                existing.company_name_norm = name_norm or existing.company_name_norm
+                existing.email_norm = email_norm or existing.email_norm
+                db.add(existing)
+                db.commit()
+
+                pk = person_key(email=email_norm, first_name=existing.first_name, last_name=existing.last_name, company_domain_norm=domain_norm)
+                if pk:
+                    history.add_person(pk)
+                npk = name_person_key(first_name=existing.first_name, last_name=existing.last_name, company_domain_norm=domain_norm)
+                if npk:
+                    history.add_person(npk)
+
+                return {
+                    "date_time": existing.date_time.isoformat(),
+                    "company_name": existing.company_name,
+                    "company_domain": existing.company_domain,
+                    "employee_count": existing.employee_count,
+                    "first_name": existing.first_name,
+                    "last_name": existing.last_name,
+                    "email": existing.email,
+                    "job_title": existing.job_title,
+                    "status_code": existing.status_code,
+                    "status_detail": existing.status_detail,
+                }
+
         row = History(
             date_time=_now(),
             company_name=company_name,
@@ -313,9 +367,43 @@ def run_daily_iter(
             location=str(effective["location"]),
             company_size_min=int(effective["company_size_min"]),
             daily_objective=quota,
+            linkup_search_depth=str(effective.get("linkup_search_depth") or "standard"),
         )
     )
     companies_total = len(companies)
+
+    # Always write a run marker so History isn't empty even when company pool is empty.
+    last = write_history(
+        company_name=None,
+        company_domain=None,
+        employee_count=None,
+        first_name=None,
+        last_name=None,
+        email=None,
+        job_title=None,
+        status_code="RUN_STARTED",
+        status_detail=(
+            f"industry={effective['industry']} location={effective['location']} "
+            f"company_size_min={effective['company_size_min']} quota={quota} "
+            f"linkup_demo={linkup.is_demo} companies_total={companies_total}"
+        ),
+    )
+    yield emit_progress(last)
+
+    # If Linkup returned nothing (often due to strict location/HQ data), try a forced refresh once.
+    if not companies and not linkup.is_demo:
+        yield emit_info(message="Company pool empty; forcing Linkup refresh once")
+        companies = linkup.search_companies(
+            EffectiveConfig(
+                industry=str(effective["industry"]),
+                location=str(effective["location"]),
+                company_size_min=int(effective["company_size_min"]),
+                daily_objective=quota,
+                linkup_search_depth=str(effective.get("linkup_search_depth") or "standard"),
+            ),
+            force_refresh=True,
+        )
+        companies_total = len(companies)
     company_iter = iter(companies)
 
     while created_drafts < quota:

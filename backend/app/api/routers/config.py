@@ -18,6 +18,7 @@ class ConfigOut(BaseModel):
     location: str
     company_size_min: int
     daily_objective: int
+    linkup_search_depth: str
     email_subject_template: str
     email_body_template: str
     alert_email: str
@@ -29,6 +30,7 @@ class ConfigUpdate(BaseModel):
     location: str | None = None
     company_size_min: int | None = Field(default=None, ge=1)
     daily_objective: int | None = Field(default=None, ge=0)
+    linkup_search_depth: str | None = Field(default=None, pattern="^(standard|deep)$")
     email_subject_template: str | None = None
     email_body_template: str | None = None
     alert_email: str | None = None
@@ -52,6 +54,7 @@ def get_config(_: dict = Depends(require_user), db: Session = Depends(require_db
         location=cfg.location,
         company_size_min=cfg.company_size_min,
         daily_objective=cfg.daily_objective,
+        linkup_search_depth=cfg.linkup_search_depth,
         email_subject_template=cfg.email_subject_template,
         email_body_template=cfg.email_body_template,
         alert_email=cfg.alert_email,
@@ -76,6 +79,7 @@ def update_config(payload: ConfigUpdate, _: dict = Depends(require_user), db: Se
         location=cfg.location,
         company_size_min=cfg.company_size_min,
         daily_objective=cfg.daily_objective,
+        linkup_search_depth=cfg.linkup_search_depth,
         email_subject_template=cfg.email_subject_template,
         email_body_template=cfg.email_body_template,
         alert_email=cfg.alert_email,

@@ -69,10 +69,11 @@ class EffectiveConfig:
     location: str
     company_size_min: int
     daily_objective: int
+    linkup_search_depth: str = "standard"
 
 
 class LinkupService:
-    def __init__(self, *, db: Session, run_id: uuid.UUID) -> None:
+    def __init__(self, *, db: Session, run_id: uuid.UUID, search_depth: str = "standard") -> None:
         self._db = db
         self._run_id = run_id
         self._settings = Settings()
@@ -81,6 +82,9 @@ class LinkupService:
         self._queried_company_search = False
         self._queried_contacts: set[tuple[str, int]] = set()
         self._queried_emails: set[tuple[str, str]] = set()
+
+        sd = (search_depth or "").strip().lower()
+        self._search_depth = sd if sd in {"standard", "deep"} else "standard"
 
         if self._settings.linkup_api_key and not self._settings.bakliz_demo_mode:
             if LinkupClient is None:  # pragma: no cover
@@ -107,19 +111,22 @@ class LinkupService:
         except Exception:  # pragma: no cover
             self._db.rollback()
 
-    def search_companies(self, cfg: EffectiveConfig) -> list[CompanyItem]:
+    def search_companies(self, cfg: EffectiveConfig, *, force_refresh: bool = False) -> list[CompanyItem]:
         today = date.today()
         cache_key = f"{cfg.industry}|{cfg.location}|{cfg.company_size_min}|{today.isoformat()}"
-        cached = self._db.execute(
-            select(LinkupCompanySearchCache).where(
-                LinkupCompanySearchCache.industry == cfg.industry,
-                LinkupCompanySearchCache.location == cfg.location,
-                LinkupCompanySearchCache.company_size_min == cfg.company_size_min,
-                LinkupCompanySearchCache.query_date == today,
-            )
-        ).scalar_one_or_none()
+        cached = None
+        if not force_refresh:
+            cached = self._db.execute(
+                select(LinkupCompanySearchCache).where(
+                    LinkupCompanySearchCache.industry == cfg.industry,
+                    LinkupCompanySearchCache.location == cfg.location,
+                    LinkupCompanySearchCache.company_size_min == cfg.company_size_min,
+                    LinkupCompanySearchCache.query_date == today,
+                )
+            ).scalar_one_or_none()
 
         if cached is not None:
+            cached_companies = CompanySearchOutput.model_validate(cached.response).companies
             self._log(
                 kind="company_search",
                 key=cache_key,
@@ -132,7 +139,22 @@ class LinkupService:
                 },
                 response=cached.response,
             )
-            return CompanySearchOutput.model_validate(cached.response).companies
+            # If the cache is empty, treat it as stale and try a live query once.
+            if cached_companies:
+                return cached_companies
+            self._log(
+                kind="company_search",
+                key=cache_key,
+                request={
+                    "industry": cfg.industry,
+                    "location": cfg.location,
+                    "company_size_min": cfg.company_size_min,
+                    "query_date": today.isoformat(),
+                    "cache_hit": True,
+                    "cache_empty_fallback": True,
+                },
+                response={"note": "cached company list was empty; falling back to live query"},
+            )
 
         if self.is_demo:
             companies = _demo_companies(cfg)
@@ -168,7 +190,7 @@ class LinkupService:
         query = (
             "Find companies that match:\n"
             f"- Industry: {cfg.industry}\n"
-            f"- Location (HQ, strict): {cfg.location}\n"
+            f"- Preferred HQ location: {cfg.location}\n"
             f"- Minimum employees: {cfg.company_size_min}\n\n"
             "Return up to 50 companies with:\n"
             "- company_name\n"
@@ -177,14 +199,17 @@ class LinkupService:
             "- hq_location (city/region if known)\n"
             "- hq_country (country if known)\n"
             "\nIMPORTANT:\n"
-            f"- Only include companies headquartered in {cfg.location}.\n"
-            "- Do NOT include companies just operating/hiring there.\n"
+            f"- Prefer companies headquartered in {cfg.location}.\n"
+            "- If HQ is unknown, you may still include the company but leave hq_location/hq_country empty.\n"
         )
 
         assert self._client is not None
+        depth = str(getattr(cfg, "linkup_search_depth", "") or "").strip().lower() or self._search_depth
+        if depth not in {"standard", "deep"}:
+            depth = "standard"
         result: CompanySearchOutput = self._client.search(
             query=query,
-            depth="standard",
+            depth=depth,
             output_type="structured",
             structured_output_schema=CompanySearchOutput,
             max_results=200,
@@ -201,6 +226,8 @@ class LinkupService:
         loc = (cfg.location or "").strip().lower()
         if loc:
             filtered: list[CompanyItem] = []
+            unknown_hq: list[CompanyItem] = []
+            original = companies[:]
             for c in companies:
                 hq = (c.hq_location or "").strip().lower()
                 country = (c.hq_country or "").strip().lower()
@@ -210,12 +237,42 @@ class LinkupService:
                 if country and loc in country:
                     filtered.append(c)
                     continue
+                if not hq and not country:
+                    unknown_hq.append(c)
+                    continue
                 # Heuristic fallback: allow matching ccTLD for common country names.
                 dom = normalize_domain(c.company_domain)
                 if loc == "italy" and dom.endswith(".it"):
                     filtered.append(c)
                     continue
-            companies = filtered
+            if filtered:
+                companies = filtered
+            elif unknown_hq:
+                companies = unknown_hq
+                self._log(
+                    kind="company_search",
+                    key=cache_key,
+                    request={
+                        "location_filter": loc,
+                        "fallback": "unknown_hq",
+                        "kept": len(companies),
+                        "dropped": max(0, len(original) - len(companies)),
+                    },
+                    response={},
+                )
+            else:
+                # Better to have *some* companies than a guaranteed pool_exhausted run.
+                companies = original
+                self._log(
+                    kind="company_search",
+                    key=cache_key,
+                    request={
+                        "location_filter": loc,
+                        "fallback": "unfiltered",
+                        "kept": len(companies),
+                    },
+                    response={},
+                )
 
         self._log(
             kind="company_search",
@@ -226,6 +283,7 @@ class LinkupService:
                 "location": cfg.location,
                 "company_size_min": cfg.company_size_min,
                 "query_date": today.isoformat(),
+                "depth": depth,
                 "cache_hit": False,
             },
             response={
@@ -381,9 +439,10 @@ class LinkupService:
             )
 
         assert self._client is not None
+        depth = self._search_depth
         result: ContactsOutput = self._client.search(
             query=query,
-            depth="standard",
+            depth=depth,
             output_type="structured",
             structured_output_schema=ContactsOutput,
             max_results=30,
@@ -420,6 +479,7 @@ class LinkupService:
                 "company_name": company_name,
                 "company_domain": domain_norm,
                 "employee_count": employee_count,
+                "depth": depth,
                 "cache_hit": False,
                 "force_refresh": bool(force_refresh),
                 "query_variant": int(query_variant),
@@ -521,9 +581,10 @@ class LinkupService:
         )
 
         assert self._client is not None
+        depth = self._search_depth
         result: EmailEnrichmentOutput = self._client.search(
             query=query,
-            depth="standard",
+            depth=depth,
             output_type="structured",
             structured_output_schema=EmailEnrichmentOutput,
             max_results=10,
@@ -563,6 +624,7 @@ class LinkupService:
                 "company_name": company_name,
                 "first_name": first_name,
                 "last_name": last_name,
+                "depth": depth,
                 "cache_hit": False,
             },
             response=result.model_dump(),

@@ -64,11 +64,21 @@ function App() {
       </header>
 
       <main className="content">
-        {tab === 'config' && <ConfigTab />}
-        {tab === 'blacklist' && <BlacklistTab />}
-        {tab === 'history' && <HistoryTab />}
-        {tab === 'linkup' && <ProviderLogsTab provider="linkup" />}
-        {tab === 'zeliq' && <ProviderLogsTab provider="zeliq" />}
+        <div style={{ display: tab === 'config' ? 'block' : 'none' }}>
+          <ConfigTab />
+        </div>
+        <div style={{ display: tab === 'blacklist' ? 'block' : 'none' }}>
+          <BlacklistTab />
+        </div>
+        <div style={{ display: tab === 'history' ? 'block' : 'none' }}>
+          <HistoryTab />
+        </div>
+        <div style={{ display: tab === 'linkup' ? 'block' : 'none' }}>
+          <ProviderLogsTab provider="linkup" />
+        </div>
+        <div style={{ display: tab === 'zeliq' ? 'block' : 'none' }}>
+          <ProviderLogsTab provider="zeliq" />
+        </div>
       </main>
     </div>
   )
@@ -309,6 +319,18 @@ function ConfigTab() {
             value={cfg.daily_objective}
             onChange={(e) => setCfg({ ...cfg, daily_objective: Number(e.target.value) })}
           />
+        </label>
+        <label>
+          Linkup search depth
+          <select
+            value={cfg.linkup_search_depth}
+            onChange={(e) =>
+              setCfg({ ...cfg, linkup_search_depth: e.target.value as Config['linkup_search_depth'] })
+            }
+          >
+            <option value="standard">standard</option>
+            <option value="deep">deep</option>
+          </select>
         </label>
         <label className="colspan2">
           Email subject template
