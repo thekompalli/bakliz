@@ -5,6 +5,7 @@ import {
   clearToken,
   getToken,
   setToken,
+  UNAUTHORIZED_EVENT,
   type BlacklistEntry,
   type Config,
   type HistoryRow,
@@ -22,6 +23,12 @@ function App() {
     clearToken()
     setTokenState(null)
   }
+
+  useEffect(() => {
+    const onUnauthorized = () => setTokenState(null)
+    window.addEventListener(UNAUTHORIZED_EVENT, onUnauthorized)
+    return () => window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized)
+  }, [])
 
   if (!token) return <Login onLoggedIn={setTokenState} />
 

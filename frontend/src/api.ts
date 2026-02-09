@@ -68,6 +68,12 @@ export type RunResponse = {
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL as string) || 'http://localhost:8000'
 const TOKEN_KEY = 'bakliz_token'
+export const UNAUTHORIZED_EVENT = 'bakliz:unauthorized'
+
+function notifyUnauthorized() {
+  if (typeof window === 'undefined') return
+  window.dispatchEvent(new Event(UNAUTHORIZED_EVENT))
+}
 
 export function getToken(): string | null {
   return localStorage.getItem(TOKEN_KEY)
@@ -79,6 +85,29 @@ export function setToken(token: string) {
 
 export function clearToken() {
   localStorage.removeItem(TOKEN_KEY)
+  notifyUnauthorized()
+}
+
+async function readUnauthorizedMessage(res: Response): Promise<string> {
+  try {
+    const contentType = res.headers.get('content-type') || ''
+    if (contentType.includes('application/json')) {
+      const body = (await res.json()) as unknown
+      if (
+        body &&
+        typeof body === 'object' &&
+        'detail' in body &&
+        typeof (body as { detail?: unknown }).detail === 'string'
+      ) {
+        return (body as { detail: string }).detail
+      }
+    }
+    const text = (await res.text()).trim()
+    if (text) return text
+  } catch {
+    // ignore
+  }
+  return 'Unauthorized'
 }
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
@@ -89,8 +118,9 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 
   const res = await fetch(`${API_BASE}${path}`, { ...options, headers })
   if (res.status === 401) {
+    const msg = await readUnauthorizedMessage(res)
     clearToken()
-    throw new Error('Unauthorized')
+    throw new Error(msg)
   }
   if (!res.ok) {
     const text = await res.text()
@@ -111,8 +141,9 @@ async function requestStream(
 
   const res = await fetch(`${API_BASE}${path}`, { ...options, headers })
   if (res.status === 401) {
+    const msg = await readUnauthorizedMessage(res)
     clearToken()
-    throw new Error('Unauthorized')
+    throw new Error(msg)
   }
   if (!res.ok || !res.body) {
     const text = await res.text()
