@@ -1,6 +1,7 @@
 import './App.css'
 import { useEffect, useState } from 'react'
 import {
+  API_BASE,
   api,
   clearToken,
   getToken,
@@ -96,6 +97,22 @@ function Login({ onLoggedIn }: { onLoggedIn: (token: string) => void }) {
   const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
+  const [apiStatus, setApiStatus] = useState<'checking' | 'ok' | 'error'>('checking')
+
+  useEffect(() => {
+    let cancelled = false
+    api
+      .ping()
+      .then(() => {
+        if (!cancelled) setApiStatus('ok')
+      })
+      .catch(() => {
+        if (!cancelled) setApiStatus('error')
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -136,7 +153,12 @@ function Login({ onLoggedIn }: { onLoggedIn: (token: string) => void }) {
           </button>
         </form>
         <p className="muted small">
-          API: <code>{import.meta.env.VITE_API_BASE_URL}</code>
+          API: <code>{API_BASE}</code> (
+          {apiStatus === 'checking' ? 'checking…' : apiStatus === 'ok' ? 'ok' : 'unreachable'})
+        </p>
+        <p className="muted small">
+          Docker Compose: credentials come from <code>ADMIN_USERNAME</code>/<code>ADMIN_PASSWORD</code> in{' '}
+          <code>infra/.env</code>.
         </p>
       </div>
     </div>
@@ -439,13 +461,18 @@ function BlacklistTab() {
   const [error, setError] = useState<string | null>(null)
   const [entryType, setEntryType] = useState<'company_name' | 'domain'>('domain')
   const [value, setValue] = useState('')
+  const [page, setPage] = useState(1)
+  const [total, setTotal] = useState(0)
+  const [filter, setFilter] = useState('')
+  const pageSize = 200
 
   const refresh = async () => {
     setLoading(true)
     setError(null)
     try {
-      const res = await api.listBlacklist(1, 200)
+      const res = await api.listBlacklist(page, pageSize)
       setItems(res.items)
+      setTotal(res.total)
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Failed to load blacklist')
     } finally {
@@ -456,7 +483,7 @@ function BlacklistTab() {
   useEffect(() => {
     refresh()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [page])
 
   const add = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -465,7 +492,11 @@ function BlacklistTab() {
     try {
       await api.createBlacklist({ entry_type: entryType, value })
       setValue('')
-      await refresh()
+      if (page !== 1) {
+        setPage(1)
+      } else {
+        await refresh()
+      }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Failed to add')
     }
@@ -481,6 +512,18 @@ function BlacklistTab() {
       setError(err instanceof Error ? err.message : 'Failed to delete')
     }
   }
+
+  const q = filter.trim().toLowerCase()
+  const shown = q
+    ? items.filter((it) => {
+        const raw = String(it.value_raw || '').toLowerCase()
+        const norm = String(it.value_norm || '').toLowerCase()
+        const type = String(it.entry_type || '').toLowerCase()
+        return raw.includes(q) || norm.includes(q) || type.includes(q)
+      })
+    : items
+
+  const totalPages = Math.max(1, Math.ceil(total / pageSize))
 
   return (
     <section>
@@ -499,7 +542,37 @@ function BlacklistTab() {
           Add
         </button>
       </form>
+      <div className="row wrap" style={{ alignItems: 'flex-end' }}>
+        <label className="muted small" style={{ display: 'flex', flexDirection: 'column' }}>
+          Filter (this page)
+          <input placeholder="domain / company..." value={filter} onChange={(e) => setFilter(e.target.value)} />
+        </label>
+        <button className="btn secondary" type="button" onClick={refresh} disabled={loading}>
+          Refresh
+        </button>
+      </div>
       {error && <div className="error">{error}</div>}
+      <div className="muted small" style={{ marginTop: 6 }}>
+        total: {total} · page {page}/{totalPages} · showing {shown.length}/{items.length} on this page
+      </div>
+      <div className="row" style={{ marginTop: 8 }}>
+        <button
+          className="btn secondary"
+          disabled={page <= 1 || loading}
+          type="button"
+          onClick={() => setPage((p) => Math.max(1, p - 1))}
+        >
+          Prev
+        </button>
+        <button
+          className="btn secondary"
+          disabled={page >= totalPages || loading}
+          type="button"
+          onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+        >
+          Next
+        </button>
+      </div>
       {loading ? (
         <div>Loading…</div>
       ) : (
@@ -514,7 +587,7 @@ function BlacklistTab() {
             </tr>
           </thead>
           <tbody>
-            {items.map((it) => (
+            {shown.map((it) => (
               <tr key={it.id}>
                 <td>{it.id}</td>
                 <td>{it.entry_type}</td>

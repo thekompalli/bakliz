@@ -66,7 +66,7 @@ export type RunResponse = {
   errors: Array<Record<string, unknown>>
 }
 
-const API_BASE = (import.meta.env.VITE_API_BASE_URL as string) || 'http://localhost:8000'
+export const API_BASE = (import.meta.env.VITE_API_BASE_URL as string) || 'http://localhost:8000'
 const TOKEN_KEY = 'bakliz_token'
 export const UNAUTHORIZED_EVENT = 'bakliz:unauthorized'
 
@@ -88,26 +88,23 @@ export function clearToken() {
   notifyUnauthorized()
 }
 
-async function readUnauthorizedMessage(res: Response): Promise<string> {
+async function readErrorMessage(res: Response): Promise<string> {
   try {
-    const contentType = res.headers.get('content-type') || ''
-    if (contentType.includes('application/json')) {
-      const body = (await res.json()) as unknown
-      if (
-        body &&
-        typeof body === 'object' &&
-        'detail' in body &&
-        typeof (body as { detail?: unknown }).detail === 'string'
-      ) {
-        return (body as { detail: string }).detail
-      }
-    }
     const text = (await res.text()).trim()
-    if (text) return text
+    if (!text) return res.statusText || `HTTP ${res.status}`
+
+    const contentType = res.headers.get('content-type') || ''
+    if (!contentType.includes('application/json')) return text
+
+    const body = JSON.parse(text) as unknown
+    if (!body || typeof body !== 'object' || !('detail' in body)) return text
+
+    const detail = (body as { detail?: unknown }).detail
+    if (typeof detail === 'string') return detail
+    return JSON.stringify(detail)
   } catch {
-    // ignore
+    return res.statusText || `HTTP ${res.status}`
   }
-  return 'Unauthorized'
 }
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
@@ -116,15 +113,21 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   headers.set('Content-Type', 'application/json')
   if (token) headers.set('Authorization', `Bearer ${token}`)
 
-  const res = await fetch(`${API_BASE}${path}`, { ...options, headers })
+  let res: Response
+  try {
+    res = await fetch(`${API_BASE}${path}`, { ...options, headers })
+  } catch (e: unknown) {
+    const hint = `Cannot reach API at ${API_BASE} (request: ${path})`
+    throw new Error(e instanceof Error && e.message ? `${hint}: ${e.message}` : hint)
+  }
   if (res.status === 401) {
-    const msg = await readUnauthorizedMessage(res)
+    const msg = await readErrorMessage(res)
     clearToken()
     throw new Error(msg)
   }
   if (!res.ok) {
-    const text = await res.text()
-    throw new Error(text || `HTTP ${res.status}`)
+    const msg = await readErrorMessage(res)
+    throw new Error(msg || `HTTP ${res.status}`)
   }
   return (await res.json()) as T
 }
@@ -139,15 +142,21 @@ async function requestStream(
   headers.set('Content-Type', 'application/json')
   if (token) headers.set('Authorization', `Bearer ${token}`)
 
-  const res = await fetch(`${API_BASE}${path}`, { ...options, headers })
+  let res: Response
+  try {
+    res = await fetch(`${API_BASE}${path}`, { ...options, headers })
+  } catch (e: unknown) {
+    const hint = `Cannot reach API at ${API_BASE} (request: ${path})`
+    throw new Error(e instanceof Error && e.message ? `${hint}: ${e.message}` : hint)
+  }
   if (res.status === 401) {
-    const msg = await readUnauthorizedMessage(res)
+    const msg = await readErrorMessage(res)
     clearToken()
     throw new Error(msg)
   }
   if (!res.ok || !res.body) {
-    const text = await res.text()
-    throw new Error(text || `HTTP ${res.status}`)
+    const msg = await readErrorMessage(res)
+    throw new Error(msg || `HTTP ${res.status}`)
   }
 
   const reader = res.body.getReader()
@@ -172,6 +181,9 @@ async function requestStream(
 }
 
 export const api = {
+  ping() {
+    return request<{ ok: boolean }>('/api/auth/ping')
+  },
   login(username: string, password: string) {
     return request<LoginResponse>('/api/auth/login', {
       method: 'POST',

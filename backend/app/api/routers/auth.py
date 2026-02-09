@@ -18,6 +18,15 @@ class LoginResponse(BaseModel):
     expires_in: int
 
 
+class PingResponse(BaseModel):
+    ok: bool = True
+
+
+@router.get("/auth/ping", response_model=PingResponse)
+def ping() -> PingResponse:
+    return PingResponse()
+
+
 @router.post("/auth/login", response_model=LoginResponse)
 def login(payload: LoginRequest) -> LoginResponse:
     settings = Settings()
@@ -34,4 +43,3 @@ def login(payload: LoginRequest) -> LoginResponse:
         expires_in_minutes=settings.jwt_exp_minutes,
     )
     return LoginResponse(access_token=token, expires_in=settings.jwt_exp_minutes * 60)
-

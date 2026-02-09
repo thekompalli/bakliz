@@ -6,6 +6,7 @@ BAKLIZ is a self-hosted B2B prospecting automation that guarantees a fixed numbe
 
 1) Copy env and fill required values:
 - `cp .env.example infra/.env`
+  - Docker Compose reads `infra/.env` when you run with `-f infra/docker-compose.yml`.
 
 2) Start stack:
 - `docker compose -f infra/docker-compose.yml up --build`

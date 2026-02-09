@@ -14,6 +14,7 @@ RUN python -m pip install --no-cache-dir -r /app/backend/requirements.txt
 
 COPY backend /app/backend
 COPY migrations /app/migrations
+COPY Blacklist_excel /app/Blacklist_excel
 
 WORKDIR /app/backend
 
@@ -23,4 +24,3 @@ RUN chmod +x /entrypoint.sh
 EXPOSE 8000
 
 ENTRYPOINT ["/entrypoint.sh"]
-
